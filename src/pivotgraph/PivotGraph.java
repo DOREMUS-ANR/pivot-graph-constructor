@@ -3,14 +3,16 @@ package pivotgraph;
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileNotFoundException;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.PrintWriter;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.apache.jena.query.Query;
 import org.apache.jena.query.QueryExecution;
@@ -20,12 +22,9 @@ import org.apache.jena.query.QuerySolution;
 import org.apache.jena.query.ResultSet;
 import org.apache.jena.rdf.model.Model;
 import org.apache.jena.rdf.model.ModelFactory;
-import org.apache.jena.rdf.model.Property;
 import org.apache.jena.rdf.model.Resource;
-import org.apache.jena.rdf.model.Statement;
-import org.apache.jena.rdf.model.StmtIterator;
 import org.apache.jena.vocabulary.OWL;
-import org.apache.jena.vocabulary.RDF;
+import org.omg.Messaging.SyncScopeHelper;
 import org.semanticweb.owl.align.Alignment;
 import org.semanticweb.owl.align.AlignmentException;
 import org.semanticweb.owl.align.Cell;
@@ -37,61 +36,28 @@ import sameAs.LinkList;
 public class PivotGraph {
 
 	public static void main(String[] args) throws AlignmentException, IOException, URISyntaxException {
-
 		long startTime = System.currentTimeMillis();
-
-		System.out.println("Just a heads up : I am running");
-		Model d1Model = ModelFactory.createDefaultModel();
-		Model d2Model = ModelFactory.createDefaultModel();
-		Model d3Model = ModelFactory.createDefaultModel();
-
-		Model pgModel = ModelFactory.createDefaultModel();			//we're gonna put the single links and triangles there
-		//Model pgModel = ModelFactory.createDefaultModel();			//same for two-links
-		//Model pgModel = ModelFactory.createDefaultModel();	//same for conflicts 
-		Model plusModel = ModelFactory.createDefaultModel();		//same for multiple links
 		
-		// bnf = regular 1,1G bnf
-		// bnf_short = first 180M of bnf, quite useless
-		// bnf_f22Only = only F22 type resources of bnf
-		InputStream d1In = new FileInputStream(new File("store/pp.ttl"));
-		InputStream d2In = new FileInputStream(new File("store/bnf_f22only.ttl"));
-		InputStream d3In = new FileInputStream(new File("store/rf.ttl"));
-
-		StatBundle[] stats = new StatBundle[9];// total - 0,2-0,3 - 0,31-0,4 - [...] - 0,91-0,1,61-0,8 -> 0,81-1
-		for (int i = 0; i < 9; i++) {
-			stats[i] = new StatBundle();
+		//-------------------------------------SORTING RESULTS---------------------------------------
+		int nbSure = 0;
+		int nbInvalid = 0;
+		int nbInferred = 0;
+		float threshold;
+		if(args.length==0) {
+			System.err.println("No threshold input. Setting default value : 1.0");
+			threshold = 1.0f;
+		} else {
+			try {
+				threshold = Float.parseFloat(args[0]);
+			} catch(NumberFormatException ex) {
+				System.err.println("Your threshold value is not a number. Setting default value : 1.0");
+				threshold = 1.0f;
+			}
 		}
-
-		int surelinks = 0;		//triangles
-		int linkstovalid = 0;	//conflicts
-		int createlinks = 0;	//single links
-		int inferredlinks = 0;	//two-links but similarity of both is 1
-		int plus = 0;			//multiple links from one uri to multiple uris in the same base
-		int twolinks = 0;		//two-links
-		int wasted = 0;			//single links "wasted" by multiple links 
-								//i.e. a->b, b->c,d,e      a->b is "wasted"
-		int noEqPP = 0;
-		int noEqBNF = 0;
-		int noEqRF = 0;
+		ArrayList<Link> treated = new ArrayList<>();	//treated links
+		ArrayList<Link> written = new ArrayList<>();	//written links
+		System.out.println("Threshold = "+threshold);
 		
-		ArrayList<String> compromised = new ArrayList<>();
-		//this list is to prevent already read resources to be processed again
-		//useful when dealing with some situations involving a lot of multiple links
-		
-		/***************
-		 * Models loading
-		 ***************/
-		System.out.println("Models loading ...");
-		d1Model.read(d1In, null, "TTL"); // pp
-		System.out.println("PP loaded");
-		d2Model.read(d2In, null, "TTL"); // bnf
-		System.out.println("BNF loaded");
-		d3Model.read(d3In, null, "TTL"); // rf
-		System.out.println("RF loaded");
-		long modelTime = System.currentTimeMillis();
-		/***************
-		 * Links loading
-		 ***************/
 		System.out.println("Links loading ...");
 		AlignmentParser aparser = new AlignmentParser(0);
 		Alignment results = aparser.parse(new File("store/finalResults.rdf").toURI());
@@ -102,472 +68,555 @@ public class PivotGraph {
 			linkList.add(link);
 		}
 		System.out.println("Total links loaded : "+linkList.size());
-		long linkTime = System.currentTimeMillis();
-		/**************************
-		 * Pivot graph construction
-		 **************************/
+				
+		System.out.println("Sorting valid and unsure links...");
+		//file for triangles and inferred links
+		FileWriter alignFile= new FileWriter ("store/surelinks.rdf");
+		BufferedWriter bw = new BufferedWriter (alignFile);
+		PrintWriter pw = new PrintWriter (bw);
+		pw.println("<?xml version='1.0' encoding='utf-8'?>");
+		pw.println("<rdf:RDF xmlns='http://knowledgeweb.semanticweb.org/heterogeneity/alignment'");
+		pw.println("xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'");
+		pw.println("xmlns:xsd='http://www.w3.org/2001/XMLSchema#'>");
+		pw.println("<Alignment>");
+		pw.println("<xml>yes</xml>");
+		pw.println("<level>0</level>");
+		pw.println("<type>??</type>");
 
-		System.out.println("Pivot graph construction ...");
-		StmtIterator iter1 = d2Model.listStatements();
-		boolean notequal = true;
-		Resource prevres = null;
-			while (iter1.hasNext()) {
-				Statement stmt = iter1.nextStatement();
-			// bnf_rf : équivalences de bnf dans rf
-			// donc, contient des ressources de rf
-
-			List<String> bnf_rf = new ArrayList<String>(); // Level 1 = Les objects de la 1ere ressource
-			Resource res = stmt.getSubject();
-
-			// dirty fix to avoid testing the same resource multiple times
-			// to test the old method, simply replace that false by true
-			if (prevres != null) {
-				if (prevres.equals(res)) {
-					notequal = false;
-				} else
-					notequal = true;
-			}
-
-			if (notequal) {
-				if (hasType(res) == true) // si la ressource est de type F22
-				{
-					String subj = res.toString(); // Pour chaque ressource Rb de la BNF
-					bnf_rf = linkList.getObj2OfURI1(subj); // Extraire ses equivalences de RF
-
-					/************
-					 * Safe Links
-					 ************/
-					
-					if (bnf_rf.size() == 1) // Si RB a une seule ressource equivalente RF
-					{
-						
-						//this is to handle a very special case : when a resource has multiple links on both sides
-						
-						if(!compromised.contains(subj)) {
-							List<String> rf_bnf = new ArrayList<>();
-							rf_bnf = linkList.getObj1OfURI2(bnf_rf.get(0));
-							if(rf_bnf.size()>1) {
-								for(String s : rf_bnf) {
-									compromised.add(s);
-									plus++;
-									addStat(stats, "plu", linkList.getSimScore(s, bnf_rf.get(0)));
-								}
-								compromised.add(bnf_rf.get(0));
-								for(String s : linkList.getObj2OfURI1(bnf_rf.get(0))) {
-									compromised.add(s);
-									plus++;
-									addStat(stats, "plu", linkList.getSimScore(bnf_rf.get(0), s));
-									for(String s2 : linkList.getObj2OfURI1(s)) {
-										compromised.add(s2);
-										wasted++;
-										addStat(stats, "was", linkList.getSimScore(s, s2));
-									}
-								}
-								for(String s : linkList.getObj1OfURI2(subj)){
-									compromised.add(s);
-									wasted++;
-									addStat(stats, "was", linkList.getSimScore(s, subj));
-								}
+		//file for coda (all other links that need validation)
+		FileWriter codafile = new FileWriter ("store/tovalidate.rdf");
+		BufferedWriter bw_coda = new BufferedWriter (codafile);
+		PrintWriter pw_coda = new PrintWriter (bw_coda);
+		pw_coda.println("<?xml version='1.0' encoding='utf-8'?>");
+		pw_coda.println("<rdf:RDF xmlns='http://knowledgeweb.semanticweb.org/heterogeneity/alignment'");
+		pw_coda.println("xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'");
+		pw_coda.println("xmlns:xsd='http://www.w3.org/2001/XMLSchema#'>");
+		pw_coda.println("<Alignment>");
+		pw_coda.println("<xml>yes</xml>");
+		pw_coda.println("<level>0</level>");
+		pw_coda.println("<type>??</type>");
+		
+		int cpt = 0;	//tours de boucles
+		/*
+		 * we iterate on all the links
+		 * from a link, a have a linked to b, a-b
+		 * we get all the links going from something to a and from b to something
+		 * if both links exist and are the same, it is a triangle ( a-b-c-a )
+		 * if there is two links but no third, first verify that it is not a conflict
+		 *   if not a conflict, we try to infer a third link if the conf score is high enough
+		 *   if no conf scores are too low, we pass them on to coda as two-links
+		 * any other case, we just pass it on to coda
+		 */
+		
+		for(int i=0; i<linkList.size(); i++) {
+			cpt++;
+			Link curr = linkList.get(i);
+			if(!treated.contains(curr)) {
+				treated.add(curr);
+				List<String> linkTo = linkList.getObj2OfURI1(curr.getObj2());	//link from curr to something
+				List<String> linkFrom = linkList.getObj1OfURI2(curr.getObj1());	//link from something to curr
+				for(String s : linkTo) {
+					if(!treated.contains(getLinkFromUris(linkList, curr.getObj2(),s)))
+						treated.add(getLinkFromUris(linkList, curr.getObj2(),s));
+				}
+				for(String s : linkFrom) {
+					if(!treated.contains(getLinkFromUris(linkList, s, curr.getObj1())))
+						treated.add(getLinkFromUris(linkList, s, curr.getObj1()));
+				}
+				if(linkTo.size()==1 && linkFrom.size()==1) {
+					Link l_linkto = getLinkFromUris(linkList, curr.getObj2(), linkTo.get(0));
+					Link l_linkfrom = getLinkFromUris(linkList, linkFrom.get(0), curr.getObj1());
+					if(linkTo.get(0).equals(linkFrom.get(0))) {
+						//triangle, everything is sure
+						nbSure = nbSure+writeLink(pw, curr, written);
+						nbSure = nbSure+writeLink(pw, l_linkto, written);
+						nbSure = nbSure+writeLink(pw, l_linkfrom, written);
+					} else { 
+						//conflict c-c'
+						//in a conflict, everything but the absolutely sure links (conf==1) must be validated manually
+						if(curr.getScore()==1) 
+							nbSure = nbSure+writeLink(pw, curr, written);	
+						else
+							nbInvalid=nbInvalid+writeLink(pw_coda, curr, written);
+						if(l_linkto.getScore()==1) 
+							nbSure = nbSure+writeLink(pw, l_linkto, written);
+						else 
+							nbInvalid=nbInvalid+writeLink(pw_coda, l_linkto, written);
+						if(l_linkfrom.getScore()==1)
+							nbSure = nbSure+writeLink(pw, l_linkfrom, written);
+						else 
+							nbInvalid=nbInvalid+writeLink(pw_coda, l_linkfrom, written);
+					}
+				} else if((linkTo.size()==1 && linkFrom.isEmpty()) || (linkTo.isEmpty() && linkFrom.size() == 1)) { 			
+					if(linkFrom.isEmpty()) {
+						//there is no link going to our resource a from c, but maybe there is a conflict
+						//meaning there might be a link going from the c we just found to another a
+						List<String> linkCtoA = linkList.getObj2OfURI1(linkTo.get(0)); 
+						for(String s : linkCtoA) {
+							if(!treated.contains(getLinkFromUris(linkList, linkTo.get(0), s))) 
+								treated.add(getLinkFromUris(linkList, linkTo.get(0),s));	
+						}
+						if(linkCtoA.isEmpty()) {
+							//no conflict
+							if(getLinkFromUris(linkList, curr.getObj2(), linkTo.get(0)).getScore() >= threshold && curr.getScore()>= threshold) {
+								//inferrence
+								nbInferred++;
+								nbSure = nbSure+writeLink(pw, curr, written);
+								nbSure = nbSure+writeLink(pw, getLinkFromUris(linkList, curr.getObj2(), linkTo.get(0)), written);
+								writeLink(pw, linkTo.get(0), curr.getObj1());
+							} else {
+								//two links
+								//if conf score is superior or equal to threshold we consider them sure
+								if(curr.getScore()>=threshold) 
+									nbSure = nbSure+writeLink(pw, curr, written);
+								else
+									nbInvalid=nbInvalid+writeLink(pw_coda, curr, written);
+								if(getLinkFromUris(linkList, curr.getObj2(), linkTo.get(0)).getScore()>=threshold) 
+									nbSure = nbSure+writeLink(pw, getLinkFromUris(linkList, curr.getObj2(), linkTo.get(0)), written);
+								else 
+									nbInvalid=nbInvalid+writeLink(pw_coda, getLinkFromUris(linkList, curr.getObj2(), linkTo.get(0)), written);
+							}
+						} else if(linkCtoA.size()==1){
+							//conflict a-a'
+							Link l_linkto = getLinkFromUris(linkList, curr.getObj2(), linkTo.get(0));
+							Link l_linkCtoA = getLinkFromUris(linkList, linkTo.get(0), linkCtoA.get(0));
+							if(curr.getScore()==1)
+								nbSure = nbSure+writeLink(pw, curr, written);
+							else 
+								nbInvalid=nbInvalid+writeLink(pw_coda, curr, written);
+							if(l_linkto.getScore()==1)
+								nbSure = nbSure+writeLink(pw, l_linkto, written);
+							else
+								nbInvalid=nbInvalid+writeLink(pw_coda, l_linkto, written);
+							if(l_linkCtoA.getScore()==1)
+								nbSure = nbSure+writeLink(pw, l_linkCtoA, written);
+							else
+								nbInvalid=nbInvalid+writeLink(pw_coda, l_linkCtoA, written);
+							
+						} else {
+							//multiple links problems
+							//write current link
+							if(curr.getScore()==1)
+								nbSure = nbSure+writeLink(pw, curr, written);
+							else 
+								nbInvalid+=nbInvalid+writeLink(pw_coda, curr, written); 
+							
+							//write link from b to c
+							Link l_linkto = getLinkFromUris(linkList, curr.getObj2(), linkTo.get(0));
+							if(l_linkto.getScore()==1) 
+								nbSure = nbSure+writeLink(pw, l_linkto, written);
+							else 
+								nbInvalid=nbInvalid+writeLink(pw_coda, l_linkto, written);
+							
+							//write links from c to other a's
+							for(String s : linkCtoA) {
+								Link l_linkCtoA = getLinkFromUris(linkList, linkTo.get(0), s);
+								if(l_linkCtoA.getScore()==1)
+									nbSure = nbSure+writeLink(pw, l_linkCtoA, written);
+								else
+									nbInvalid=nbInvalid+writeLink(pw_coda, l_linkCtoA, written);
 							}
 						}
-						
-						if(!compromised.contains(subj)) {
-						
-							List<String> rf_pp = new ArrayList<String>();
-							rf_pp = linkList.getObj2OfURI1(bnf_rf.get(0)); // Extraire les equivalences a RF de RP
-							if (rf_pp.size() == 1) // Si RF a une seule ressource equivalente RP
-							{
-								List<String> pp_bnf = new ArrayList<String>();
-								pp_bnf = linkList.getObj2OfURI1(rf_pp.get(0)); // Extraire les equivalences a RP de Rb
-								if (pp_bnf.size() == 1) // Si RP a une seule ressource equivalente RB
-								{
-									if (pp_bnf.get(0).equals(subj)) // Case 1 = sure links
-									{
-										// System.out.println("sure links");
-										surelinks = surelinks + 1;
-										String identifier1 = getID(d2Model, subj);
-										String identifier2 = getID(d3Model, bnf_rf.get(0));
-										String identifier3 = getID(d1Model, rf_pp.get(0));
-										Resource rsrce = pgModel.createResource((ConstructURI.build("bnf", identifier1, "rf", identifier2, "pp", identifier3, "F22_SelfContainedExpression")).toString());
-										rsrce.addProperty(OWL.sameAs, pgModel.createResource(subj));
-										rsrce.addProperty(OWL.sameAs, pgModel.createResource(bnf_rf.get(0)));
-										rsrce.addProperty(OWL.sameAs, pgModel.createResource(rf_pp.get(0)));
-										addStat(stats, "tri", linkList.getSimScore(subj, bnf_rf.get(0)));
-										addStat(stats, "tri", linkList.getSimScore(bnf_rf.get(0), rf_pp.get(0)));
-										addStat(stats, "tri", linkList.getSimScore(rf_pp.get(0), subj));
-									} else // Case 3 = conflit
-									{
-										linkstovalid = linkstovalid + 1;
-										String identifier1 = getID(d2Model, subj);
-										String identifier2 = getID(d3Model, bnf_rf.get(0));
-										String identifier3 = getID(d1Model, rf_pp.get(0));
-										Resource rsrce = pgModel.createResource((ConstructURI.build("bnf", identifier1, "rf", identifier2, "pp", identifier3, "F22_SelfContainedExpression")).toString());
-										rsrce.addProperty(OWL.sameAs, pgModel.createResource(subj));
-										rsrce.addProperty(OWL.sameAs, pgModel.createResource(bnf_rf.get(0)));
-										rsrce.addProperty(OWL.sameAs, pgModel.createResource(rf_pp.get(0)));
-										rsrce.addProperty(OWL.sameAs, pgModel.createResource(pp_bnf.get(0)));
-										addStat(stats, "con", linkList.getSimScore(subj, bnf_rf.get(0)));
-										addStat(stats, "con", linkList.getSimScore(bnf_rf.get(0), rf_pp.get(0)));
-										addStat(stats, "con", linkList.getSimScore(rf_pp.get(0), pp_bnf.get(0)));
-									}
-								} else if (pp_bnf.size() == 0)  // <RB = RF> & <RF = RP> mais nous ne trouvons pas d'equivalence de RP avec RB
-								{
-									double sim1 = linkList.getSimScore(subj, bnf_rf.get(0));
-									double sim2 = linkList.getSimScore(bnf_rf.get(0), rf_pp.get(0));
-									if (sim1 == 1 & sim2 == 1) // Si les 2 liens ont une similarite=1 alors on infere le
-																// 3eme lien et on cree un URI pivot
-									{
-										Link link = new Link(rf_pp.get(0), subj, 1);	//created the inferred link
-										linkList.add(link);
-										inferredlinks = inferredlinks + 1;
-										surelinks = surelinks + 1;
-										String identifier1 = getID(d2Model, subj);
-										String identifier2 = getID(d3Model, bnf_rf.get(0));
-										String identifier3 = getID(d1Model, rf_pp.get(0));
-										Resource rsrce = pgModel.createResource((ConstructURI.build("bnf", identifier1, "rf", identifier2,"pp", identifier3, "F22_SelfContainedExpression")).toString());
-										rsrce.addProperty(OWL.sameAs, pgModel.createResource(subj));
-										rsrce.addProperty(OWL.sameAs, pgModel.createResource(bnf_rf.get(0)));
-										rsrce.addProperty(OWL.sameAs, pgModel.createResource(rf_pp.get(0)));
-										addStat(stats, "inf", linkList.getSimScore(subj, bnf_rf.get(0)));
-										addStat(stats, "inf", linkList.getSimScore(bnf_rf.get(0), rf_pp.get(0)));
-									} else {	//sim < 1
-										twolinks++;
-										String identifier1 = getID(d2Model, subj);
-										String identifier2 = getID(d3Model, bnf_rf.get(0));
-										String identifier3 = getID(d1Model, rf_pp.get(0));
-										Resource rsrce = pgModel.createResource((ConstructURI.build("bnf", identifier1, "rf", identifier2,"pp", identifier3, "F22_SelfContainedExpression")).toString());
-										rsrce.addProperty(OWL.sameAs, pgModel.createResource(subj));
-										rsrce.addProperty(OWL.sameAs, pgModel.createResource(bnf_rf.get(0)));
-										rsrce.addProperty(OWL.sameAs, pgModel.createResource(rf_pp.get(0)));
-										addStat(stats, "two", linkList.getSimScore(subj, bnf_rf.get(0)));
-										addStat(stats, "two", linkList.getSimScore(bnf_rf.get(0), rf_pp.get(0)));
-									}
-								} else { //plusieurs
-									plus = plus + pp_bnf.size();
-									wasted = wasted+2;
-									String identifier1 = getID(d2Model, subj);
-									String identifier2 = getID(d3Model, bnf_rf.get(0));
-									String identifier3 = getID(d1Model, rf_pp.get(0));
-									Resource rsrce = plusModel.createResource((ConstructURI.build("bnf", identifier1, "rf", identifier2,"pp", identifier3, "F22_SelfContainedExpression")).toString());
-									rsrce.addProperty(OWL.sameAs, plusModel.createResource(subj));
-									rsrce.addProperty(OWL.sameAs, plusModel.createResource(bnf_rf.get(0)));
-									rsrce.addProperty(OWL.sameAs, plusModel.createResource(rf_pp.get(0)));
-									addStat(stats, "was", linkList.getSimScore(subj, bnf_rf.get(0)));
-									addStat(stats, "was", linkList.getSimScore(bnf_rf.get(0), rf_pp.get(0)));
-									for(int i=0; i<pp_bnf.size(); i++) {
-										rsrce.addProperty(OWL.sameAs, plusModel.createResource(pp_bnf.get(i)));
-										addStat(stats, "plu", linkList.getSimScore(rf_pp.get(0), pp_bnf.get(i)));
-									}
-								}
-							} else if (rf_pp.size() == 0) // Case 2
-							// si pas d'equivalence entre RF et RP
-							{
-								List<String> bnf_pp = new ArrayList<String>();
-								bnf_pp = linkList.getObj1OfURI2(subj); 
-								if(bnf_pp.size()==1) { 
-									double sim1 = linkList.getSimScore(subj, bnf_rf.get(0));
-									double sim2 = linkList.getSimScore(bnf_pp.get(0), subj);
-									if (sim1 == 1 & sim2 == 1) // Si les 2 liens ont une similarite=1 alors on infere le
-																// 3eme lien et on cree un URI pivot
-									{
-										Link link = new Link(rf_pp.get(0), subj, 1);	//created the inferred link
-										linkList.add(link);
-										inferredlinks = inferredlinks + 1;
-										surelinks = surelinks + 1;
-										String identifier1 = getID(d2Model, subj);
-										String identifier2 = getID(d3Model, bnf_rf.get(0));
-										String identifier3 = getID(d1Model, bnf_pp.get(0));
-										Resource rsrce = pgModel.createResource((ConstructURI.build("bnf", identifier1, "rf", identifier2,"pp", identifier3, "F22_SelfContainedExpression")).toString());
-										rsrce.addProperty(OWL.sameAs, pgModel.createResource(subj));
-										rsrce.addProperty(OWL.sameAs, pgModel.createResource(bnf_rf.get(0)));
-										rsrce.addProperty(OWL.sameAs, pgModel.createResource(bnf_pp.get(0)));
-										addStat(stats, "inf", linkList.getSimScore(subj, bnf_rf.get(0)));
-										addStat(stats, "inf", linkList.getSimScore(bnf_pp.get(0), subj));
-									} else {	//sim < 1
-										twolinks++;
-										String identifier1 = getID(d2Model, subj);
-										String identifier2 = getID(d3Model, bnf_rf.get(0));
-										String identifier3 = getID(d1Model, bnf_pp.get(0));
-										Resource rsrce = pgModel.createResource((ConstructURI.build("bnf", identifier1, "rf", identifier2,"pp", identifier3, "F22_SelfContainedExpression")).toString());
-										rsrce.addProperty(OWL.sameAs, pgModel.createResource(subj));
-										rsrce.addProperty(OWL.sameAs, pgModel.createResource(bnf_rf.get(0)));
-										rsrce.addProperty(OWL.sameAs, pgModel.createResource(bnf_pp.get(0)));
-										addStat(stats, "two", linkList.getSimScore(subj, bnf_rf.get(0)));
-										addStat(stats, "two", linkList.getSimScore(bnf_pp.get(0), subj));
-									}
-								} else {
-									createlinks = createlinks + 1;
-									String identifier1 = getID(d2Model, subj);
-									String identifier2 = getID(d3Model, bnf_rf.get(0));
-									Resource rsrce = pgModel.createResource((ConstructURI.build("bnf", identifier1, "rf",
-										identifier2, "F22_SelfContainedExpression")).toString());
-									rsrce.addProperty(OWL.sameAs, pgModel.createResource(subj));
-									rsrce.addProperty(OWL.sameAs, pgModel.createResource(bnf_rf.get(0)));
-									addStat(stats, "one", linkList.getSimScore(subj, bnf_rf.get(0)));
-								}
-							} else {	//plusieurs
-								plus = plus + rf_pp.size();
-								wasted++;
-								String identifier1 = getID(d2Model, subj);
-								String identifier2 = getID(d3Model, bnf_rf.get(0));
-								String identifier3 = getID(d1Model, rf_pp.get(0));
-								Resource rsrce = plusModel.createResource((ConstructURI.build("bnf", identifier1, "rf", identifier2,"pp", identifier3, "F22_SelfContainedExpression")).toString());
-								rsrce.addProperty(OWL.sameAs, plusModel.createResource(subj));
-								rsrce.addProperty(OWL.sameAs, plusModel.createResource(bnf_rf.get(0)));
-								addStat(stats, "was", linkList.getSimScore(subj, bnf_rf.get(0)));
-								for(int i=0; i<rf_pp.size(); i++) {
-									rsrce.addProperty(OWL.sameAs, plusModel.createResource(rf_pp.get(i)));
-									addStat(stats, "plu", linkList.getSimScore(bnf_rf.get(0), rf_pp.get(i)));
-								}
-							}
+					} else {	//linkTo.isEmpty()
+						//there is no link going from our resource b to c, but maybe there is a conflict
+						//meaning there might be a link going to the c we just found from another b
+						List<String> linkCtoB = linkList.getObj1OfURI2(linkFrom.get(0)); 
+						for(String s : linkCtoB) {
+							if(!treated.contains(getLinkFromUris(linkList, s, linkFrom.get(0))))
+								treated.add(getLinkFromUris(linkList, s, linkFrom.get(0)));
 						}
-					} else if (bnf_rf.size() > 1 && !compromised.contains(subj)) {
-						// System.out.println("plusieurs");
-						plus = plus + bnf_rf.size();
-						String identifier1 = getID(d2Model, subj);
-						String identifier2 = getID(d3Model, bnf_rf.get(0));
-						Resource rsrce = plusModel.createResource((ConstructURI.build("bnf", identifier1, "rf", identifier2, "F22_SelfContainedExpression")).toString());
-						rsrce.addProperty(OWL.sameAs, plusModel.createResource(subj));
-						for(int i=0; i<bnf_rf.size(); i++) {
-							rsrce.addProperty(OWL.sameAs, plusModel.createResource(bnf_rf.get(i)));
-							addStat(stats, "plu", linkList.getSimScore(subj, bnf_rf.get(i)));
-						}
-						
-						
-					} else if(!compromised.contains(subj)){ // si pas de lien entre bnf et rf
-						List<String> bnf_pp = new ArrayList<String>();
-						bnf_pp = linkList.getObj1OfURI2(subj); // équivalences de bnf dans pp
-						if (bnf_pp.size() == 1) {
-							List<String> pp_rf = new ArrayList<String>();
-							pp_rf = linkList.getObj1OfURI2(bnf_pp.get(0)); // équivalences de pp dans rf
-
-	
-							if (pp_rf.size() == 1) { // lien à inférer
-								double sim1 = linkList.getSimScore(subj, bnf_pp.get(0));
-								double sim2 = linkList.getSimScore(bnf_pp.get(0), pp_rf.get(0));
-								if (sim1 == 1 & sim2 == 1) // Si les 2 liens ont une similarite=1 alors on infere le 3eme lien et on cree un URI pivot
-								{
-									Link link = new Link(pp_rf.get(0), subj, 1);
-									linkList.add(link);
-									inferredlinks = inferredlinks + 1;
-									surelinks++;
-									String identifier1 = getID(d2Model, subj);
-									String identifier2 = getID(d1Model, bnf_pp.get(0));
-									String identifier3 = getID(d3Model, pp_rf.get(0));
-									Resource rsrce = pgModel.createResource((ConstructURI.build("bnf", identifier1, "pp", identifier2,"rf", identifier3, "F22_SelfContainedExpression")).toString());
-									rsrce.addProperty(OWL.sameAs, pgModel.createResource(subj));
-									rsrce.addProperty(OWL.sameAs, pgModel.createResource(bnf_pp.get(0)));
-									rsrce.addProperty(OWL.sameAs, pgModel.createResource(pp_rf.get(0)));
-									addStat(stats, "inf", linkList.getSimScore(subj, bnf_pp.get(0)));
-									addStat(stats, "inf", linkList.getSimScore(bnf_pp.get(0), pp_rf.get(0)));
-								} else { //sim <1
-									twolinks++;
-									String identifier1 = getID(d2Model, subj);
-									String identifier2 = getID(d1Model, bnf_pp.get(0));
-									String identifier3 = getID(d3Model, pp_rf.get(0));
-									Resource rsrce = pgModel.createResource((ConstructURI.build("bnf", identifier1, "pp", identifier2,"rf", identifier3, "F22_SelfContainedExpression")).toString());
-									rsrce.addProperty(OWL.sameAs, pgModel.createResource(subj));
-									rsrce.addProperty(OWL.sameAs, pgModel.createResource(bnf_pp.get(0)));
-									rsrce.addProperty(OWL.sameAs, pgModel.createResource(pp_rf.get(0)));
-									addStat(stats, "two", linkList.getSimScore(subj, bnf_pp.get(0)));
-									addStat(stats, "two", linkList.getSimScore(bnf_pp.get(0), pp_rf.get(0)));
-								}
-							} else if (pp_rf.size() > 1) { //plusieurs
-								plus = plus + pp_rf.size();
-								wasted++;
-								String identifier1 = getID(d2Model, subj);
-								String identifier2 = getID(d3Model, bnf_pp.get(0));
-								String identifier3 = getID(d1Model, pp_rf.get(0));
-								Resource rsrce = plusModel.createResource((ConstructURI.build("bnf", identifier1, "pp", identifier2,"rf", identifier3, "F22_SelfContainedExpression")).toString());
-								rsrce.addProperty(OWL.sameAs, plusModel.createResource(subj));
-								rsrce.addProperty(OWL.sameAs, plusModel.createResource(bnf_pp.get(0)));
-								addStat(stats, "was", linkList.getSimScore(subj, bnf_pp.get(0)));
-								for(int i=0; i<pp_rf.size(); i++) {
-									rsrce.addProperty(OWL.sameAs, plusModel.createResource(pp_rf.get(i)));
-									addStat(stats, "plu", linkList.getSimScore(bnf_pp.get(0), pp_rf.get(0)));
-								}
+						if(linkCtoB.isEmpty()) {
+							//no conflict
+							if(getLinkFromUris(linkList, linkFrom.get(0), curr.getObj1()).getScore() >= threshold && curr.getScore()>=threshold) {
+								//inferrence
+								nbInferred++;
+								nbSure = nbSure+writeLink(pw, curr, written);
+								nbSure = nbSure+writeLink(pw, getLinkFromUris(linkList, linkFrom.get(0), curr.getObj1()), written);
+								writeLink(pw, curr.getObj2(), linkFrom.get(0));
+							} else {
+								//two links
+								if(curr.getScore()>=threshold) 
+									nbSure = nbSure+writeLink(pw, curr, written);	
+								else 
+									nbInvalid=nbInvalid+writeLink(pw_coda, curr, written);
+								if(getLinkFromUris(linkList, linkFrom.get(0), curr.getObj1()).getScore()>=threshold) 
+									nbSure = nbSure+writeLink(pw, getLinkFromUris(linkList, linkFrom.get(0), curr.getObj1()), written);
+								else
+									nbInvalid=nbInvalid+writeLink(pw_coda, getLinkFromUris(linkList, linkFrom.get(0), curr.getObj1()), written);
 								
-							} else if (pp_rf.size() == 0) {
-								createlinks = createlinks + 1;
-								String identifier1 = getID(d2Model, subj);
-								String identifier2 = getID(d1Model, bnf_pp.get(0));
-								Resource rsrce = pgModel.createResource((ConstructURI.build("bnf", identifier1, "pp",
-										identifier2, "F22_SelfContainedExpression")).toString());
-								rsrce.addProperty(OWL.sameAs, pgModel.createResource(subj));
-								rsrce.addProperty(OWL.sameAs, pgModel.createResource(bnf_pp.get(0)));
-								addStat(stats, "one", linkList.getSimScore(subj, bnf_pp.get(0)));
 							}
-						} else if (bnf_pp.size()>1) { //plusieurs
-							plus = plus + bnf_pp.size();
-							String identifier1 = getID(d2Model, subj);
-							String identifier2 = getID(d3Model, bnf_pp.get(0));
-							Resource rsrce = plusModel.createResource((ConstructURI.build("bnf", identifier1, "pp", identifier2, "F22_SelfContainedExpression")).toString());
-							rsrce.addProperty(OWL.sameAs, plusModel.createResource(subj));
-							for(int i=0; i<bnf_pp.size(); i++) {
-								rsrce.addProperty(OWL.sameAs, plusModel.createResource(bnf_pp.get(i)));
-								addStat(stats, "plu", linkList.getSimScore(subj, bnf_pp.get(i)));
+						} else if (linkCtoB.size()==1){
+							//conflict b-b'
+							Link l_linkfrom = getLinkFromUris(linkList, linkFrom.get(0), curr.getObj1());
+							Link l_linkCtoB = getLinkFromUris(linkList, linkCtoB.get(0), linkFrom.get(0));
+							if(curr.getScore()==1)
+								nbSure = nbSure+writeLink(pw, curr, written);
+							else
+								nbInvalid=nbInvalid+writeLink(pw_coda, curr, written);
+							if(l_linkfrom.getScore()==1) 
+								nbSure = nbSure+writeLink(pw, l_linkfrom, written);
+							else 
+								nbInvalid=nbInvalid+writeLink(pw_coda, l_linkfrom, written);
+							if(l_linkCtoB.getScore()==1) 
+								nbSure = nbSure+writeLink(pw, l_linkCtoB, written);
+							else 
+								nbInvalid=nbInvalid+writeLink(pw_coda, l_linkCtoB, written);
+						} else {
+							//linked to multiple links. to validate.
+							if(curr.getScore()==1) {
+								nbSure = nbSure+writeLink(pw, curr, written);
+							} else {
+								nbInvalid++;
+								writeLink(pw_coda, curr, written);
+							}
+							Link l_linkfrom = getLinkFromUris(linkList, linkFrom.get(0), curr.getObj1());
+							if(l_linkfrom.getScore()==1) {
+								nbSure = nbSure+writeLink(pw, l_linkfrom, written);
+							} else {
+								nbInvalid=nbInvalid+writeLink(pw_coda, l_linkfrom, written);
+							}
+							for(String s : linkCtoB) {
+								Link l_linkCtoB = getLinkFromUris(linkList, s, linkFrom.get(0));
+								if(l_linkCtoB.getScore()==1) {
+									nbSure = nbSure+writeLink(pw, l_linkCtoB, written);
+								} else {
+									nbInvalid=nbInvalid+writeLink(pw_coda, l_linkCtoB, written);
+								}
+							}
+						}
+					}
+				} else {// single links or multiples links
+					if(linkList.getNbEquivalences(curr.getObj1())==1 && linkList.getNbEquivalences(curr.getObj2())==1) {
+						//single link 
+						if(curr.getScore()>=threshold) {
+							nbSure = nbSure+writeLink(pw, curr, written);
+						} else {
+							nbInvalid=nbInvalid+writeLink(pw_coda, curr, written);
+						}
+					} else {
+						//uncharted territory
+						//multiple links, rare, large and complex multistructures
+						//here be dragons
+						//we only write them in sure if they are absolutely secure (conf==1)
+						if(curr.getScore()==1) {
+							nbSure = nbSure+writeLink(pw, curr, written);
+						} else {
+							nbInvalid=nbInvalid+writeLink(pw_coda, curr, written);
+						}
+						for(String s : linkTo) {
+							Link l_linkto = getLinkFromUris(linkList, curr.getObj2(), s);
+							if(l_linkto.getScore()==1) {
+								nbSure = nbSure+writeLink(pw, l_linkto, written);
+							} else {
+								nbInvalid=nbInvalid+writeLink(pw_coda, l_linkto, written);
+							}
+						}
+						for(String s : linkFrom) {
+							Link l_linkfrom = getLinkFromUris(linkList, s, curr.getObj1());
+							if(l_linkfrom.getScore()==1) {
+								nbSure = nbSure+writeLink(pw, l_linkfrom, written);
+							} else {
+								nbInvalid=nbInvalid+writeLink(pw_coda, l_linkfrom, written);
 							}
 						}
 					}
 				}
 			}
-			prevres = stmt.getSubject();
 		}
-		long graphTime = System.currentTimeMillis();
+		
+		pw.println("</Alignment>");
+		pw.println("</rdf:RDF>");
+		pw.close();
+		bw.close();
+		alignFile.close();
+		
+		pw_coda.println("</Alignment>");
+		pw_coda.println("</rdf:RDF>");
+		pw_coda.close();
+		bw_coda.close();
+		codafile.close();
+		long sortTime = System.currentTimeMillis();
+		
+		Set<Link> set = new HashSet<Link>(treated);
+		if(set.size()<treated.size()) System.out.println(treated.size()-set.size()+" duplicates in treated");
 
-		System.out.println("Vérification des liens uniques entre PP et RF");
-		// détection des liens uniques entre pp et rf
-		StmtIterator iter2 = d1Model.listStatements();
-		notequal = true;
-		prevres = null;
-		while (iter2.hasNext()) {
-			Statement stmt = iter2.nextStatement();
-
-			List<String> pp_bnf = new ArrayList<String>(); // liens de pp à bnf (doivent être vides)
-			Resource res = stmt.getSubject();
-
-			if (prevres != null) {
-				if (prevres.equals(res)) {
-					notequal = false;
-				} else
-					notequal = true;
-			}
-
-			if (notequal) {
-				if (hasType(res) == true) {
-					String subj = res.toString(); // chaque ressource de PP
-					pp_bnf = linkList.getObj2OfURI1(subj); // //liens de pp à bnf(doivent êtres vides)
-					List<String> pp_rf = new ArrayList<String>(); // liens de pp à rf (doit être à un)
-					pp_rf = linkList.getObj1OfURI2(subj);
-					if (pp_bnf.size() == 0 && pp_rf.size() == 1) {
-						List<String> rf_bnf = new ArrayList<String>(); // doit aussi être vide
-						rf_bnf = linkList.getObj1OfURI2(pp_rf.get(0));
-						if (rf_bnf.size() == 0) {
-							createlinks = createlinks + 1;
-							String identifier1 = getID(d1Model, subj);
-							String identifier2 = getID(d3Model, pp_rf.get(0));
-							Resource rsrce = pgModel.createResource((ConstructURI.build("pp", identifier1, "rf",
-									identifier2, "F22_SelfContainedExpression")).toString());
-							rsrce.addProperty(OWL.sameAs, pgModel.createResource(subj));
-							rsrce.addProperty(OWL.sameAs, pgModel.createResource(pp_rf.get(0)));
-							addStat(stats, "one", linkList.getSimScore(subj, pp_rf.get(0)));
-						}
+		System.out.println("Sure links      : "+nbSure);
+		System.out.println("To Validate     : "+nbInvalid);
+		System.out.println("Total Written Links  : "+(written.size()+nbInferred)+"  ("+cpt+" original links, "+nbInferred+" inferred links)");
+		
+		
+		//-------------------------------------MODEL LOADING---------------------------------------
+		System.out.println("");
+		System.out.println("Loading models...");
+		System.out.println("Warning : this step can take a long time, depending on the size of your models.");
+		Model aModel = ModelFactory.createDefaultModel();	//base A model (loading from file)
+		Model bModel = ModelFactory.createDefaultModel();	//base B model (same)
+		Model cModel = ModelFactory.createDefaultModel();	//base C model (same)
+		Model pgModel = ModelFactory.createDefaultModel();	//pivot graph (that we are going to build)
+		InputStream aIn = new FileInputStream(new File("store/pp.ttl"));
+		InputStream bIn = new FileInputStream(new File("store/bnf_f22only.ttl"));
+		InputStream cIn = new FileInputStream(new File("store/rf.ttl"));
+		
+		aModel.read(aIn, null, "TTL"); // pp
+		String aid = "pp";
+		System.out.println("Model 1 loaded");
+		
+		bModel.read(bIn, null, "TTL"); // bnf
+		String bid = "bnf";
+		System.out.println("Model 2 loaded");
+		
+		cModel.read(cIn, null, "TTL"); // rf
+		String cid = "rf";
+		System.out.println("Model 3 loaded");
+		long modelTime = System.currentTimeMillis();
+		
+		System.out.println("Valid Links loading ...");
+		AlignmentParser aparser2 = new AlignmentParser(0);
+		Alignment results2 = aparser2.parse(new File("store/surelinks.rdf").toURI());
+		List<Cell> list2 = Collections.list(results2.getElements());
+		LinkList sureLinkList = new LinkList();
+		for (Cell cell : list2) {
+			Link link = new Link(cell.getObject1().toString(), cell.getObject2().toString(), cell.getStrength());
+			sureLinkList.add(link);
+		}
+		System.out.println("Total sure links loaded : "+sureLinkList.size());
+		
+		System.out.println("PivotGraph construction...");
+		treated = new ArrayList<Link>();			//reseting treated 
+		ArrayList<Link> vsc = new ArrayList<>(); 	//to list very special cases (ex : multiple links with conf 1 that passed sorting)
+		int sureTriangle = 0;
+		int sureSingle = 0;
+		
+		/*
+		 * these are sure links, there is supposed to be only two scenarios : 
+		 * single link or triangle
+		 * we determine which case it is, then create the resources and add em to the model
+		 * it is possible to detect very special cases, that we are going to add to another file, given their rarity and complexity 
+		 * (they managed to cheat sorting after all)
+		 */
+		for(int i=0; i<sureLinkList.size(); i++) {
+			Link curr = sureLinkList.get(i);
+			if(!treated.contains(curr)) {
+				treated.add(curr);
+				
+				if(sureLinkList.getNbEquivalences(curr.getObj1())==1 && sureLinkList.getNbEquivalences(curr.getObj2())==1) {
+					//single link
+					sureSingle++;
+					List<String> identifiers1 = getIDFromModels(aModel, bModel, cModel, curr.getObj1(), aid, bid, cid);
+					List<String> identifiers2 = getIDFromModels(aModel, bModel, cModel, curr.getObj2(), aid, bid, cid);
+					Resource rsrce = pgModel.createResource((ConstructURI.build(identifiers1.get(0), identifiers1.get(1), 
+							identifiers2.get(0), identifiers2.get(1), "F22_SelfContainedExpression")).toString());
+					rsrce.addProperty(OWL.sameAs, pgModel.createResource(curr.getObj1()));
+					rsrce.addProperty(OWL.sameAs, pgModel.createResource(curr.getObj2()));
+				} else {
+					//triangle or very special case (multiple conf 1 links for example)
+					List<String> linkTo = sureLinkList.getObj2OfURI1(curr.getObj2());
+					List<String> linkFrom = sureLinkList.getObj1OfURI2(curr.getObj1());
+					if(linkTo.isEmpty() || linkFrom.isEmpty()) {
+						//neither a single link nor a triangle : there is a problem
+						vsc.add(curr);
+					} else {
+						//triangle	
+						sureTriangle = sureTriangle +3;
+						treated.add(getLinkFromUris(sureLinkList, linkTo.get(0), curr.getObj1()));
+						treated.add(getLinkFromUris(sureLinkList, curr.getObj2(), linkTo.get(0)));
+						List<String> identifiers1 = getIDFromModels(aModel, bModel, cModel, curr.getObj1(), aid, bid, cid);
+						List<String> identifiers2 = getIDFromModels(aModel, bModel, cModel, curr.getObj2(), aid, bid, cid);
+						List<String> identifiers3 = getIDFromModels(aModel, bModel, cModel, linkTo.get(0), aid, bid, cid);
+						Resource rsrce = pgModel.createResource((ConstructURI.build(identifiers1.get(0), identifiers1.get(1), 
+							identifiers2.get(0), identifiers2.get(1), identifiers3.get(0), identifiers3.get(1),
+							"F22_SelfContainedExpression")).toString());
+						rsrce.addProperty(OWL.sameAs, pgModel.createResource(curr.getObj1()));
+						rsrce.addProperty(OWL.sameAs, pgModel.createResource(curr.getObj2()));
+						rsrce.addProperty(OWL.sameAs, pgModel.createResource(linkTo.get(0)));
 					}
 				}
 			}
-			prevres = stmt.getSubject();
 		}
-		long bonusGraphTime = System.currentTimeMillis();
-
-		// Creer un URI pivot pour chaque ressource qui n'a pas du tout d'equivalence
+		long pivotTime = System.currentTimeMillis();
+		
+		//creating a pivot uri for each unlinked resource
+		System.out.println("Finding unlinked resources...");
 		List<String> classnames = new ArrayList<String>();
 		classnames.add("http://erlangen-crm.org/efrbroo/F22_Self-Contained_Expression");
 
-		List<Resource> ppRsrces = getResources(d1Model, classnames);
-		for (Resource res : ppRsrces) {
-			String resPP = res.toString();
-			if (linkList.hasEquivalence(resPP) == false) {
-				noEqPP = noEqPP + 1;
-				String identifier1 = getID(d1Model, resPP);
+		int noEqA = 0;
+		int noEqB = 0;
+		int noEqC = 0;
+		
+		List<Resource> aRsrces = getResources(aModel, classnames);
+		for (Resource res : aRsrces) {
+			String resA = res.toString();
+			if (sureLinkList.hasEquivalence(resA) == false) {
+				noEqA = noEqA + 1;
+				List<String> identifiers1 = getIDFromModels(aModel, bModel, cModel, resA, aid, bid, cid);
 				Resource rsrce = pgModel.createResource(
-						(ConstructURI.build("pp", identifier1, "F22_SelfContainedExpression")).toString());
-				rsrce.addProperty(OWL.sameAs, pgModel.createResource(resPP));
+						(ConstructURI.build(identifiers1.get(0), identifiers1.get(1), "F22_SelfContainedExpression")).toString());
+				rsrce.addProperty(OWL.sameAs, pgModel.createResource(resA));
 			}
 		}
 
-		List<Resource> bnfRsrces = getResources(d2Model, classnames);
-		for (Resource res : bnfRsrces) {
-			String resBNF = res.toString();
-			if (linkList.hasEquivalence(resBNF) == false) {
-				noEqBNF = noEqBNF + 1;
-				String identifier2 = getID(d2Model, resBNF);
+		List<Resource> bRsrces = getResources(bModel, classnames);
+		for (Resource res : bRsrces) {
+			String resB = res.toString();
+			if (sureLinkList.hasEquivalence(resB) == false) {
+				noEqB = noEqB + 1;
+				List<String> identifiers2 = getIDFromModels(aModel, bModel, cModel, resB, aid, bid, cid);
 				Resource rsrce = pgModel.createResource(
-						(ConstructURI.build("bnf", identifier2, "F22_SelfContainedExpression")).toString());
-				rsrce.addProperty(OWL.sameAs, pgModel.createResource(resBNF));
+						(ConstructURI.build(identifiers2.get(0), identifiers2.get(1), "F22_SelfContainedExpression")).toString());
+				rsrce.addProperty(OWL.sameAs, pgModel.createResource(resB));
 			}
 		}
 
-		List<Resource> rfRsrces = getResources(d3Model, classnames);
-		for (Resource res : rfRsrces) {
-			String resRF = res.toString();
-			if (linkList.hasEquivalence(resRF) == false) {
-				noEqRF = noEqRF + 1;
-				String identifier3 = getID(d3Model, resRF);
+		List<Resource> cRsrces = getResources(cModel, classnames);
+		for (Resource res : cRsrces) {
+			String resC = res.toString();
+			if (sureLinkList.hasEquivalence(resC) == false) {
+				noEqC = noEqC + 1;
+				List<String> identifiers3 = getIDFromModels(aModel, bModel, cModel, resC, aid, bid, cid);
 				Resource rsrce = pgModel.createResource(
-						(ConstructURI.build("rf", identifier3, "F22_SelfContainedExpression")).toString());
-				rsrce.addProperty(OWL.sameAs, pgModel.createResource(resRF));
+						(ConstructURI.build(identifiers3.get(0), identifiers3.get(1), "F22_SelfContainedExpression")).toString());
+				rsrce.addProperty(OWL.sameAs, pgModel.createResource(resC));
 			}
 		}
-
-		System.out.println("Triangles = " + surelinks);
-		System.out.println("Conflits = " + linkstovalid);
-		System.out.println("Liens uniques = " + createlinks);
-		System.out.println("Plusieurs liens = " + plus);
-		System.out.println("Liens inferres (sim 1) = " + inferredlinks);
-		System.out.println("Deux liens : "+ twolinks);
-		System.out.println("Liens gâchés = "+wasted);
-		System.out.println("Liens totaux : "+(surelinks*3 + linkstovalid*3 + createlinks + plus + inferredlinks*2 + twolinks*2 + wasted));
-		System.out.println("ressources PP uniques = " + noEqPP);
-		System.out.println("ressources BNF uniques = " + noEqBNF);
-		System.out.println("ressources RF uniques = " + noEqRF);
-		System.out.println("TOTAL LINKS IN LINKLIST : "+linkList.size());
-
+		long unicTime = System.currentTimeMillis();
+		
+		//writing PGC
+		System.out.println("Writing results...");
 		FileWriter van = new FileWriter("store/pivotgraph.rdf");
 		pgModel.write(van, "RDF/XML");
 		van.close();
 		
-		/*FileWriter tou = new FileWriter("store/twolinkgraph.rdf");
-		pgModel.write(tou, "RDF/XML");
-		tou.close();
-		
-		FileWriter tri = new FileWriter("store/conflictgraph.rdf");
-		pgModel.write(tri, "RDF/XML");
-		tri.close();
-		*/
-		
-		FileWriter foh = new FileWriter("store/plusgraph.rdf");
-		plusModel.write(foh, "RDF/XML");
-		foh.close();
-		
-		writeStats(stats);
-		
+								//writing special cases									
+		FileWriter tvo = new FileWriter("store/VSC.rdf");
+		BufferedWriter bwtvo = new BufferedWriter(tvo);
+		PrintWriter pwtvo = new PrintWriter(bwtvo);
+		for(Link l : vsc) {	
+			writeLink(pwtvo, l, new ArrayList<>());
+		}																	
+		System.out.println("");	
+		System.out.println("-------------------------------------------------------------------------------------------------");
+		System.out.println("RESULTS");
+		System.out.println("-------------------------------------------------------------------------------------------------");
+		System.out.println("Sure Single Links : "+sureSingle);
+		System.out.println("Sure Triangles : "+sureTriangle);
+		System.out.println("Special Cases detected : "+vsc.size());
+		System.out.println("Total : "+(sureSingle+sureTriangle+vsc.size()));
+		System.out.println("Unique resources from "+aid+" : "+noEqA);
+		System.out.println("Unique resources from "+bid+" : "+noEqB);
+		System.out.println("Unique resources from "+cid+" : "+noEqC);
 		long endTime = System.currentTimeMillis();
-		System.out.println("Total run time : " + (((double) (endTime - startTime)) / 1000.0));
-		System.out.println("Model loading time : " + (((double) (modelTime - startTime)) / 1000));
-		System.out.println("Link loading time : " + (((double) (linkTime - modelTime)) / 1000));
-		System.out.println("Graph building time : " + (((double) (graphTime - linkTime)) / 1000));
-		System.out.println("Bonus Graph Building time : " + (((double) (bonusGraphTime - graphTime)) / 1000));
-
+		System.out.println("Total run time : .............."+(endTime-startTime));
+		System.out.println("Sorting : ....................."+(sortTime-startTime));
+		System.out.println("Model Loading : ..............."+(modelTime-sortTime));
+		System.out.println("Pivot Graph generation : ......"+(pivotTime-modelTime));
+		System.out.println("Unique Resources handling : ..."+(unicTime-pivotTime));
+		
+		
+		
 	}
-
-	public static boolean hasType(Resource resource) {
-		// returns true if resource has a property (rdf:type) with a value
-		// (classResource)
-		boolean is = false;
-		Model model = ModelFactory.createDefaultModel();
-		Resource classResource = model.createResource("http://erlangen-crm.org/efrbroo/F22_Self-Contained_Expression");
-		if (resource.hasProperty(RDF.type, classResource)) {
-			is = true;
-		}
-		return is;
+	
+	/*
+	 * writes a link with pw if it is not written already
+	 */
+	public static int writeLink(PrintWriter pw, Link l, List<Link> written) {
+		if(!written.contains(l)) {
+			pw.println("<map>");
+			pw.println("<Cell>");
+			pw.println("<entity1 rdf:resource=\""+l.getObj1()+"\"/>");
+			pw.println("<entity2 rdf:resource=\""+l.getObj2()+"\"/>");
+			pw.println("<measure rdf:datatype=\"http://www.w3.org/2001/XMLSchema#float\">"+l.getScore()+"</measure>");
+			pw.println("<relation> = </relation>");
+			pw.println("</Cell>");
+			pw.println("</map>");
+			pw.println("");
+			written.add(l);
+			return 1;
+		} else return 0;
 	}
-
-	public static String getID(Model model, String rsrc) {
+	
+	/*
+	 * used to write links that are not present in finalResults
+	 * e.g. to write links deduced from inferrences
+	 */
+	public static void writeLink(PrintWriter pw, String uri1, String uri2) {	
+		pw.println("<map>");
+		pw.println("<Cell>");
+		pw.println("<entity1 rdf:resource=\""+uri1+"\"/>");
+		pw.println("<entity2 rdf:resource=\""+uri2+"\"/>");
+		pw.println("<measure rdf:datatype=\"http://www.w3.org/2001/XMLSchema#float\">"+1.0+"</measure>");
+		pw.println("<relation> = </relation>");
+		pw.println("</Cell>");
+		pw.println("</map>");
+		pw.println("");
+	}
+	
+	public static Link getLinkFromUris(LinkList l, String uri1, String uri2) {
+		int i = l.getLinkID(uri1, uri2);
+		if(i>=0) {
+			Link lin = l.get(i);
+			return lin;
+		} else return null;
+	}
+	
+	/*
+	 * finds from which base a resource is, and its id
+	 */
+	public static List<String> getIDFromModels(Model amodel, Model bmodel, Model cmodel, String rsrc, String aid, String bid, String cid) {
 		String id = "";
 		String sparqlQueryString = "PREFIX p1: <http://erlangen-crm.org/efrbroo/>"
 				+ "PREFIX p2: <http://purl.org/dc/terms/>" + "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>"
 				+ "select ?id where {" + "<" + rsrc + "> a p1:F22_Self-Contained_Expression ." + "<" + rsrc
 				+ "> p2:identifier ?id ." + "}";
 		Query query = QueryFactory.create(sparqlQueryString);
-		QueryExecution qexec = QueryExecutionFactory.create(query, model);
+		ArrayList<String> results = new ArrayList<>();
+		//checking model a
+		QueryExecution qexec = QueryExecutionFactory.create(query, amodel);
 		ResultSet queryResults = qexec.execSelect();
+		int nbResults = 0;
 		while (queryResults.hasNext()) {
+			nbResults++;
 			QuerySolution qs = queryResults.nextSolution();
 			id = id + qs.getLiteral("?id").toString() + " ";
 		}
-		return id.trim();
+		if(nbResults>0) {
+			results.add(aid);
+			results.add(id.trim());
+			return results;
+		}
+		
+		//model b
+		qexec = QueryExecutionFactory.create(query, bmodel);
+		queryResults = qexec.execSelect();
+		nbResults = 0;
+		while (queryResults.hasNext()) {
+			nbResults++;
+			QuerySolution qs = queryResults.nextSolution();
+			id = id + qs.getLiteral("?id").toString() + " ";
+		}
+		if(nbResults>0) {
+			results.add(bid);
+			results.add(id.trim());
+			return results;
+		}
+		
+		qexec = QueryExecutionFactory.create(query, cmodel);
+		queryResults = qexec.execSelect();
+		nbResults = 0;
+		while (queryResults.hasNext()) {
+			nbResults++;
+			QuerySolution qs = queryResults.nextSolution();
+			id = id + qs.getLiteral("?id").toString() + " ";
+		}
+		if(nbResults>0) {
+			results.add(cid);
+			results.add(id.trim());
+			return results;
+		}
+		
+		return null;
 	}
-
+	
 	/*****************************************************
 	 * Get all resources of a given class from an RDF model
 	 *****************************************************/
@@ -586,78 +635,5 @@ public class PivotGraph {
 		}
 		return results;
 	}
-
-	/*
-	 * adds a stat depending on its type and confidence value
-	 */
-	public static void addStat(StatBundle[] stats, String type, double conf) {
-		stats[0].addStat(type);
-
-		if (conf <= 0.3)
-			stats[1].addStat(type);
-		else if (conf <= 0.4)
-			stats[2].addStat(type);
-		else if (conf <= 0.5)
-			stats[3].addStat(type);
-		else if (conf <= 0.6)
-			stats[4].addStat(type);
-		else if (conf <= 0.7)
-			stats[5].addStat(type);
-		else if (conf <= 0.8)
-			stats[6].addStat(type);
-		else if (conf <= 0.9)
-			stats[7].addStat(type);
-		else
-			stats[8].addStat(type);
-	}
 	
-	public static void writeStats(StatBundle[] stats) throws IOException {
-		
-		FileWriter fw = new FileWriter("store/stats.txt");
-		BufferedWriter bw = new BufferedWriter(fw);
-		String tw = "";
-		tw += "-----------------------------------------------------------------------------------\n";
-		tw += "STATISTICS\n";
-		tw += "-----------------------------------------------------------------------------------\n";
-		tw += "\n";
-		tw += "Total links : \n";
-		tw += stats[0].toString()+"\n";
-		tw += "-----------------------------------------------------------------------------------\n";
-		tw += "Conf 0,2 - 0,3 : \n";
-		tw += stats[1].toString()+"\n";
-		tw += "-----------------------------------------------------------------------------------\n";
-		tw += "Conf 0,31 - 0,4 : \n";
-		tw += stats[2].toString()+"\n";
-		tw += "-----------------------------------------------------------------------------------\n";
-		tw += "Conf 0,41 - 0,5 : \n";
-		tw += stats[3].toString()+"\n";
-		tw += "-----------------------------------------------------------------------------------\n";
-		tw += "Conf 0,51 - 0,6 : \n";
-		tw += stats[4].toString()+"\n";
-		tw += "-----------------------------------------------------------------------------------\n";
-		tw += "Conf 0,61 - 0,7 : \n";
-		tw += stats[5].toString()+"\n";
-		tw += "-----------------------------------------------------------------------------------\n";
-		tw += "Conf 0,71 - 0,8 : \n";
-		tw += stats[6].toString()+"\n";
-		tw += "-----------------------------------------------------------------------------------\n";
-		tw += "Conf 0,81 - 0,9 : \n";
-		tw += stats[7].toString()+"\n";
-		tw += "-----------------------------------------------------------------------------------\n";
-		tw += "Conf 0,91 - 1.0 : \n";
-		tw += stats[8].toString()+"\n";
-		tw += "-----------------------------------------------------------------------------------\n";
-		
-		bw.write(tw);
-		bw.close();
-		fw.close();
-	}
 }
-
-
-
-
-
-
-
-

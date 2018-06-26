@@ -31,6 +31,7 @@ public class Link {
 	
 	@Override
 	public boolean equals(Object o) {
+		if(o==null) return false;
 		return (((Link) o).getObj1().equals(uri1) && ((Link) o).getObj2().equals(uri2) && ((Link) o).getScore()==rel);
 	}
 	
