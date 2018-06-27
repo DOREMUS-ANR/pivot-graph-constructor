@@ -19,8 +19,9 @@ Arguments :
 
 As explained above, loading large models with Jena is very expensive in ram, the maximum memory have to be increased in order to run the program.
 JVM Arguments : 
-	-d64       : to force the JVM to use 64 bits, i.e. more than 1Gb of ram)
-	-Xmx2048m  : sets the maximum memory allowed to the JVM. These values are an example, depending on the size of your models, you might need more or less ram. Specify the amount, and the unit used (m, g).
+
+	- -d64       : to force the JVM to use 64 bits, i.e. more than 1Gb of ram)
+	- -Xmx2048m  : sets the maximum memory allowed to the JVM. These values are an example, depending on the size of your models, you might need more or less ram. Specify the amount, and the unit used (m, g).
 
 Optional argument : 
 	You can specify a manual threshold for the sorting phase. It will be converted to a float. If no threshold value is entered, or if the value is not readable, the program will use the default value of 1.0
