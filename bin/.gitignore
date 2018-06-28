@@ -1,9 +1,4 @@
 /.DS_Store
+/.scannerwork/
 /pivotgraph/
 /sameAs/
-
-store/*
-
-src/pivotgraph/Scripts.java
-src/pivotgraph/PivotGraph.java
-src/pivotgraph/StatBundle.java

@@ -38,11 +38,12 @@ public class PivotGraph {
 	public static void main(String[] args) throws AlignmentException, IOException, URISyntaxException {
 		long startTime = System.currentTimeMillis();
 		
-		//-------------------------------------SORTING RESULTS---------------------------------------
-		int nbSure = 0;
-		int nbInvalid = 0;
-		int nbInferred = 0;
-		float threshold;
+		//-------------------------------------SORTING PHASE---------------------------------------
+		int nbSure = 0;		//number of sure links
+		int nbInvalid = 0;	//number of invalid links
+		int nbInferred = 0;	//number of invalid links
+		float threshold;	//conf value, in some cases if a link has a value superior or equal to it, it will be considered a sure link
+	
 		if(args.length==0) {
 			System.err.println("No threshold input. Setting default value : 1.0");
 			threshold = 1.0f;
@@ -54,10 +55,12 @@ public class PivotGraph {
 				threshold = 1.0f;
 			}
 		}
-		ArrayList<Link> treated = new ArrayList<>();	//treated links
-		ArrayList<Link> written = new ArrayList<>();	//written links
+		
+		ArrayList<Link> treated = new ArrayList<>();	//treated links, so we do not process again a link we have already covered 
+		ArrayList<Link> written = new ArrayList<>();	//written links, so we do not write a link that we have already written
 		System.out.println("Threshold = "+threshold);
 		
+		//building a list of links containing all links in finalresults
 		System.out.println("Links loading ...");
 		AlignmentParser aparser = new AlignmentParser(0);
 		Alignment results = aparser.parse(new File("store/finalResults.rdf").toURI());
@@ -96,7 +99,7 @@ public class PivotGraph {
 		pw_coda.println("<level>0</level>");
 		pw_coda.println("<type>??</type>");
 		
-		int cpt = 0;	//tours de boucles
+		int cpt = 0;	//loop counter
 		/*
 		 * we iterate on all the links
 		 * from a link, a have a linked to b, a-b
@@ -108,10 +111,11 @@ public class PivotGraph {
 		 * any other case, we just pass it on to coda
 		 */
 		
-		for(int i=0; i<linkList.size(); i++) {
+		
+		for(int i=0; i<linkList.size(); i++) { //for each link																																																																																																																																																																																		
 			cpt++;
 			Link curr = linkList.get(i);
-			if(!treated.contains(curr)) {
+			if(!treated.contains(curr)) {	//verify we haven't treated it already (in a triangle for example)
 				treated.add(curr);
 				List<String> linkTo = linkList.getObj2OfURI1(curr.getObj2());	//link from curr to something
 				List<String> linkFrom = linkList.getObj1OfURI2(curr.getObj1());	//link from something to curr
@@ -129,11 +133,11 @@ public class PivotGraph {
 					if(linkTo.get(0).equals(linkFrom.get(0))) {
 						//triangle, everything is sure
 						nbSure = nbSure+writeLink(pw, curr, written);
-						nbSure = nbSure+writeLink(pw, l_linkto, written);
+						nbSure = nbSure+writeLink(pw, l_linkto, written);																																																																																																																																																																																											
 						nbSure = nbSure+writeLink(pw, l_linkfrom, written);
 					} else { 
 						//conflict c-c'
-						//in a conflict, everything but the absolutely sure links (conf==1) must be validated manually
+						//in a conflict, everything but the sure links (conf==1) must be validated manually	
 						if(curr.getScore()==1) 
 							nbSure = nbSure+writeLink(pw, curr, written);	
 						else
@@ -324,17 +328,14 @@ public class PivotGraph {
 			}
 		}
 		
+		//end of the surelinks file
 		pw.println("</Alignment>");
 		pw.println("</rdf:RDF>");
 		pw.close();
 		bw.close();
-		alignFile.close();
-		
-		pw_coda.println("</Alignment>");
-		pw_coda.println("</rdf:RDF>");
-		pw_coda.close();
-		bw_coda.close();
-		codafile.close();
+		alignFile.close();		
+		//we don't write the end of the tovalid file yet, since we can still find special cases in the pivot graph construction
+
 		long sortTime = System.currentTimeMillis();
 		
 		Set<Link> set = new HashSet<Link>(treated);
@@ -359,15 +360,15 @@ public class PivotGraph {
 		
 		aModel.read(aIn, null, "TTL"); // pp
 		String aid = "pp";
-		System.out.println("Model 1 loaded");
+		System.out.println("Model 1 loaded, ("+aid+")");
 		
 		bModel.read(bIn, null, "TTL"); // bnf
 		String bid = "bnf";
-		System.out.println("Model 2 loaded");
+		System.out.println("Model 2 loaded, ("+bid+")");
 		
 		cModel.read(cIn, null, "TTL"); // rf
 		String cid = "rf";
-		System.out.println("Model 3 loaded");
+		System.out.println("Model 3 loaded, ("+cid+")");
 		long modelTime = System.currentTimeMillis();
 		
 		System.out.println("Valid Links loading ...");
@@ -487,13 +488,22 @@ public class PivotGraph {
 		pgModel.write(van, "RDF/XML");
 		van.close();
 		
-								//writing special cases									
+		//writing special cases, both in the VSC file and the tovalid file								
 		FileWriter tvo = new FileWriter("store/VSC.rdf");
 		BufferedWriter bwtvo = new BufferedWriter(tvo);
 		PrintWriter pwtvo = new PrintWriter(bwtvo);
 		for(Link l : vsc) {	
-			writeLink(pwtvo, l, new ArrayList<>());
-		}																	
+			writeLink(pwtvo, l, new ArrayList<>());		//no need to give a written arraylist, we know these links 
+			writeLink(pw_coda, l, new ArrayList<>());	//have not been written already
+		}					
+		
+		//finally closing the tovalid file
+		pw_coda.println("</Alignment>");
+		pw_coda.println("</rdf:RDF>");
+		pw_coda.close();
+		bw_coda.close();
+		codafile.close();
+		
 		System.out.println("");	
 		System.out.println("-------------------------------------------------------------------------------------------------");
 		System.out.println("RESULTS");
@@ -516,8 +526,14 @@ public class PivotGraph {
 		
 	}
 	
-	/*
+	/**
 	 * writes a link with pw if it is not written already
+	 * 
+	 * @param pw : printwriter used to write the link
+	 * @param l : link that is going to be written
+	 * @param written : list containing all links already written, so we do not write a link twice
+	 * @return 1 if the link was written, 0 if it was already present in the list written
+	 *
 	 */
 	public static int writeLink(PrintWriter pw, Link l, List<Link> written) {
 		if(!written.contains(l)) {
@@ -535,9 +551,15 @@ public class PivotGraph {
 		} else return 0;
 	}
 	
-	/*
+	/**
 	 * used to write links that are not present in finalResults
 	 * e.g. to write links deduced from inferrences
+	 * no need to give a conf value, these links are always written with a conf of 1
+	 * 
+	 * @param pw : printwriter used to write the link
+	 * @param uri1 : the first uri of the link
+	 * @param uri 2 : the seconde uri of the link
+	 * 
 	 */
 	public static void writeLink(PrintWriter pw, String uri1, String uri2) {	
 		pw.println("<map>");
@@ -551,6 +573,15 @@ public class PivotGraph {
 		pw.println("");
 	}
 	
+	/**
+	 * gets a specific Link from the LinkList, if it exists
+	 * yes, this method could be written in LinkList instead
+	 * 
+	 * @param l : the list from where we will search the link 
+	 * @param uri1 : first uri of the link we want
+	 * @param uri2 : second uri - - - - - - - - - -
+	 * @return the link we searched for if it exists, null if not
+	 */
 	public static Link getLinkFromUris(LinkList l, String uri1, String uri2) {
 		int i = l.getLinkID(uri1, uri2);
 		if(i>=0) {
@@ -559,8 +590,21 @@ public class PivotGraph {
 		} else return null;
 	}
 	
-	/*
-	 * finds from which base a resource is, and its id
+	//finds from which base a resource is, and its id
+	
+	/**
+	 * finds from which base a resource is from, and its id
+	 * 
+	 * @param amodel : first model (base)
+	 * @param bmodel : second model (base)
+	 * @param cmodel : third model (base)
+	 * @param rsrc : the resource we want to find (the uri)
+	 * @param aid : identifier of the first base (default version : pp)
+	 * @param bid : identifier of the second base (default version : bnf)
+	 * @param cid : identifier of the third base (default version : rf)
+	 * @return a list containing in this order : - the identifier of the model where the rsrc was found
+	 *             								 - the id of the resource in said model
+	 *         null if the resource was not found
 	 */
 	public static List<String> getIDFromModels(Model amodel, Model bmodel, Model cmodel, String rsrc, String aid, String bid, String cid) {
 		String id = "";

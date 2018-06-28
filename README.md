@@ -5,10 +5,12 @@ The algorithm creates a graph that contains the union of all works (entities fro
 
 
 This program uses four files, that need to be present in the store folder before execution :
-	-finalResults.rdf, the concatenation of the three alignment files produced by Legato. These alignments need to be in good order (from base a to 	b, b to c, and finally c to a) for PGC to work properly.
-	-bnf.ttl or bnf_f22only.ttl, the ttl file describing the bnf database (bnf_f22only is a trimmed down version of bnf, keeping only f22 expressions).
-	-pp.ttl, same as bnf 
-	-rf.ttl, same as bnf and pp
+
+	- finalResults.rdf, the concatenation of the three alignment files produced by Legato. These alignments need to be in good order (from base a to b, b to c, and finally c to a) for PGC to work properly.
+	- bnf.ttl or bnf_f22only.ttl, the ttl file describing the bnf database (bnf_f22only is a trimmed down version of bnf, keeping only f22 expressions).
+	- pp.ttl, same as bnf 
+	- rf.ttl, same as bnf and pp
+
 The three ttl files are only used to get all empty resources (f22 expressions only) to write them on the Pivot Graph. It is recommended to trim them down before, as loading large models in Jena is especially time and ram consuming.
 
 Disclaimer : since this algorithm is designed to be used with bases containing only unique resource, without any duplicates, any multiple links from one resource to others are considered erroneous.
