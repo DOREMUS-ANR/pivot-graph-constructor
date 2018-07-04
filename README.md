@@ -1,19 +1,19 @@
-# pivot-graph-constructor
-Algorithm for creating the pivot graph of works out of the interlinking process of DOREMUS datasets
+# pivot-graph-constructor (PGC)
+An algorithm for creating the pivot graph of works out of the interlinking process of DOREMUS datasets.
 
-The algorithm creates a graph that contains the union of all works (entities from the F22 class) contained in the DOREMUS bases, identified by nouvel URIs and linked via owl:sameAs statements to their correpsonding works in each base. When a link between two works across two bases has been established in the data linking process (see https://github.com/DOREMUS-ANR/knowledge-base/tree/master/linked-data), this link is also added to the pivot graph. 
+The algorithm creates a graph that contains the union of all works (entities from the F22 class) contained in the DOREMUS bases (for the time being the program takes as input 3 bases only), identified by nouvel URIs and linked via owl:sameAs statements to their correpsonding works in each base. When a link between two works across two bases has been established in the data linking process (see https://github.com/DOREMUS-ANR/knowledge-base/tree/master/linked-data), this link is also added to the pivot graph. 
 
 
 This program uses four files, that need to be present in the store folder before execution :
 
-	- finalResults.rdf, the concatenation of the three alignment files produced by Legato. These alignments need to be in good order (from base a to b, b to c, and finally c to a) for PGC to work properly.
+	- finalResults.rdf, the concatenation of the 3 alignment files produced by the linking phase (useing Legato). These alignments need follow a specific order  in the EDOAL file (from base a to b, b to c, and finally c to a) for PGC to work properly.
 	- bnf.ttl or bnf_f22only.ttl, the ttl file describing the bnf database (bnf_f22only is a trimmed down version of bnf, keeping only f22 expressions).
 	- pp.ttl, same as bnf 
 	- rf.ttl, same as bnf and pp
 
-The three ttl files are only used to get all empty resources (f22 expressions only) to write them on the Pivot Graph. It is recommended to trim them down before, as loading large models in Jena is especially time and ram consuming.
+The three ttl files are only used to get all empty resources (F22 expressions only) to write them on the Pivot Graph. It is recommended to trim them down before, as loading large models in Jena is especially time and ram consuming.
 
-Disclaimer : since this algorithm is designed to be used with bases containing only unique resource, without any duplicates, any multiple links from one resource to others are considered erroneous.
+Disclaimer : since this algorithm is designed to be used with bases containing only unique resources, without any duplicates, any multiple links from one resource to another are considered erroneous.
 
 ----------------
 Arguments : 
