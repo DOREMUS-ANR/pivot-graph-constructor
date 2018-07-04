@@ -6,7 +6,7 @@ The algorithm creates a graph that contains the union of all works (entities fro
 
 This program uses four files, that need to be present in the store folder before execution :
 
-	- finalResults.rdf, the concatenation of the 3 alignment files produced by the linking phase (useing Legato). These alignments need follow a specific order  in the EDOAL file (from base a to b, b to c, and finally c to a) for PGC to work properly.
+	- finalResults.rdf, the concatenation of the 3 alignment files produced by the linking phase (using Legato). These alignments need follow a specific order  in the EDOAL file (from base a to b, b to c, and finally c to a) for PGC to work properly.
 	- bnf.ttl or bnf_f22only.ttl, the ttl file describing the bnf database (bnf_f22only is a trimmed down version of bnf, keeping only f22 expressions).
 	- pp.ttl, same as bnf 
 	- rf.ttl, same as bnf and pp
@@ -48,6 +48,7 @@ Output Files :
 	- surelinks.rdf  : file containing all sure links found
 	- tovalidate.rdf : file containing all links that have to be manually validated
 	- pivotgraph.rdf : the actual pivot graph, linking created uris to their equivalent in different bases using sameAs properties
-	- VSC.rdf        : "very special cases", containing abnormal (conflictuous, erroneous, etc) patterns with a very high or perfect conf value.
+	- VSC.rdf        : "very special cases", containing abnormal (conflictuous, erroneous, etc) patterns with a very high or perfect conf value. Used to help you 
+
 
 If a VSC file is generated, we advise you to track down the erroneous links in your data, to understand how and why they have been formed and solve the issue in your linking protocol.
