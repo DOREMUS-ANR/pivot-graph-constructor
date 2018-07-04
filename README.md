@@ -48,4 +48,6 @@ Output Files :
 	- surelinks.rdf  : file containing all sure links found
 	- tovalidate.rdf : file containing all links that have to be manually validated
 	- pivotgraph.rdf : the actual pivot graph, linking created uris to their equivalent in different bases using sameAs properties
-	- VSC.rdf        : "very special cases", containing abnormal (conflictuous, erroneous, etc) patterns with a very high or perfect conf value. Used to help you 
+	- VSC.rdf        : "very special cases", containing abnormal (conflictuous, erroneous, etc) patterns with a very high or perfect conf value.
+
+If a VSC file is generated, we advise you to track down the erroneous links in your data, to understand how and why they have been formed and solve the issue in your linking protocol.
