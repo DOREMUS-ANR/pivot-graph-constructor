@@ -6,8 +6,11 @@ import java.io.FileInputStream;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.PrintWriter;
+import java.io.Reader;
 import java.net.URISyntaxException;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -366,7 +369,12 @@ public class PivotGraph {
 		String bid = "bnf";
 		System.out.println("Model 2 loaded, ("+bid+")");
 		
-		cModel.read(cIn, null, "TTL"); // rf
+		//InputStream in =new FileInputStream(inputFile);
+		Reader r = new InputStreamReader(cIn, Charset.forName("UTF-8"));
+
+		cModel.read(r,null,"TTL");
+		
+	//	cModel.read(cIn, null, "TTL"); // rf
 		String cid = "rf";
 		System.out.println("Model 3 loaded, ("+cid+")");
 		long modelTime = System.currentTimeMillis();
