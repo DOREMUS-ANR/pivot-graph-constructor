@@ -45,17 +45,17 @@ public class PivotGraph {
 		int nbSure = 0;		//number of sure links
 		int nbInvalid = 0;	//number of invalid links
 		int nbInferred = 0;	//number of invalid links
-		float threshold;	//conf value, in some cases if a link has a value superior or equal to it, it will be considered a sure link
+		double threshold;	//conf value, in some cases if a link has a value superior or equal to it, it will be considered a sure link
 	
 		if(args.length==0) {
 			System.err.println("No threshold input. Setting default value : 1.0");
-			threshold = 1.0f;
+			threshold = 1.0d;
 		} else {
 			try {
-				threshold = Float.parseFloat(args[0]);
+				threshold = Double.parseDouble(args[0]);
 			} catch(NumberFormatException ex) {
 				System.err.println("Your threshold value is not a number. Setting default value : 1.0");
-				threshold = 1.0f;
+				threshold = 1.0d;
 			}
 		}
 		
@@ -206,7 +206,7 @@ public class PivotGraph {
 							if(curr.getScore()==1)
 								nbSure = nbSure+writeLink(pw, curr, written);
 							else 
-								nbInvalid+=nbInvalid+writeLink(pw_coda, curr, written); 
+								nbInvalid=nbInvalid+writeLink(pw_coda, curr, written); 
 							
 							//write link from b to c
 							Link l_linkto = getLinkFromUris(linkList, curr.getObj2(), linkTo.get(0));
@@ -273,8 +273,7 @@ public class PivotGraph {
 							if(curr.getScore()==1) {
 								nbSure = nbSure+writeLink(pw, curr, written);
 							} else {
-								nbInvalid++;
-								writeLink(pw_coda, curr, written);
+								nbInvalid=nbInvalid+writeLink(pw_coda, curr, written);
 							}
 							Link l_linkfrom = getLinkFromUris(linkList, linkFrom.get(0), curr.getObj1());
 							if(l_linkfrom.getScore()==1) {
